@@ -1,0 +1,6 @@
+{
+  "preset": "city",
+  "seed": 42,
+  "trees": true,
+  "cars": true
+}
