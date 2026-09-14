@@ -1,0 +1,90 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cozy City — 실제 생성 모델 미리보기</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#dfe7df;color:#263d39;font-family:system-ui,sans-serif;overflow:hidden}canvas{display:block;width:100vw;height:100vh}header{position:fixed;left:26px;top:24px;pointer-events:none;background:rgba(245,247,237,.91);padding:16px 20px;border-radius:12px}small{letter-spacing:3px;font-size:11px}h1{font-size:30px;font-weight:600;margin:6px 0}p{margin:7px 0;font-size:13px;line-height:1.6}nav{position:fixed;bottom:24px;left:26px;display:flex;gap:8px}button{border:1px solid #b6c7bc;background:#f5f6ed;padding:11px 18px;border-radius:8px;color:#263d39;cursor:pointer}#error{position:fixed;bottom:80px;left:26px;color:#923b31;white-space:pre-wrap}
+</style>
+<canvas id="view"></canvas><header><small>PROCEDURAL LOW-POLY ENVIRONMENT</small><h1>Cozy City</h1><p id="stats"></p><p>드래그: 회전 · 휠: 확대/축소<br>실제 메시를 표시하는 간이 뷰어입니다. Blender 최종 렌더가 아닙니다.</p></header>
+<nav><button id="home">전체 보기</button><button id="top">평면 보기</button><button id="zoom">중앙 광장</button></nav><pre id="error"></pre>
+<script>
+'use strict';
+const data=__CITY_DATA__;
+try {
+const canvas=document.getElementById('view'),gl=canvas.getContext('webgl',{antialias:true,alpha:false});
+if(!gl) { cpuPreview(canvas,data); } else {
+const vert=`attribute vec3 p;attribute vec3 n;attribute vec4 c;
+uniform vec3 loc;uniform float angle;uniform float scale;
+uniform vec3 eye;uniform vec3 right;uniform vec3 up;uniform vec3 forward;
+uniform float width;uniform float height;uniform float far;
+varying vec3 color;varying vec3 normal;
+void main(){float s=sin(angle),q=cos(angle);mat3 r=mat3(q,s,0.,-s,q,0.,0.,0.,1.);
+vec3 v=r*p*scale+loc-eye;normal=r*n;color=c.rgb;
+gl_Position=vec4(dot(v,right)*2./width,dot(v,up)*2./height,2.*dot(v,forward)/far-1.,1.);}`;
+const frag=`precision mediump float;varying vec3 color;varying vec3 normal;
+void main(){vec3 n=normalize(normal);float sun=max(dot(n,normalize(vec3(-.55,-.65,1.))),0.);
+vec3 lit=color*(.45+.55*sun);gl_FragColor=vec4(pow(lit,vec3(1./2.2)),1.);}`;
+function shader(type,src){let s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;}
+const program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,vert));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,frag));gl.linkProgram(program);
+if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));gl.useProgram(program);
+const u={};for(const k of ['loc','angle','scale','eye','right','up','forward','width','height','far'])u[k]=gl.getUniformLocation(program,k);
+const attrs=['p','n','c'].map(k=>gl.getAttribLocation(program,k));
+const models={};for(const [k,values]of Object.entries(data.assets)){models[k]=values.map(a=>{let b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(a),gl.STATIC_DRAW);return b;});models[k].count=values[0].length/3;}
+gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);gl.clearColor(.875,.906,.875,1);
+let az=-.95,el=.78,width=data.size*1.55,target=[0,0,2];
+function normalize(v){let n=Math.hypot(...v);return v.map(x=>x/n);}
+function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function draw(){const dpr=Math.min(window.devicePixelRatio||1,2);canvas.width=Math.round(innerWidth*dpr);canvas.height=Math.round(innerHeight*dpr);gl.viewport(0,0,canvas.width,canvas.height);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+let radius=data.size*2,offset=[Math.cos(az)*Math.cos(el)*radius,Math.sin(az)*Math.cos(el)*radius,Math.sin(el)*radius];
+let eye=target.map((v,i)=>v+offset[i]),f=normalize(offset.map(v=>-v)),r=normalize(cross(f,[0,0,1])),up=cross(r,f);
+for(const [k,v] of Object.entries({eye:eye,right:r,up:up,forward:f}))gl.uniform3fv(u[k],v);
+gl.uniform1f(u.width,width);gl.uniform1f(u.height,width*canvas.height/canvas.width);gl.uniform1f(u.far,data.size*5);
+let last=null;for(const it of data.instances){let m=models[it.asset];if(last!==it.asset){for(let i=0;i<3;i++){gl.bindBuffer(gl.ARRAY_BUFFER,m[i]);gl.enableVertexAttribArray(attrs[i]);gl.vertexAttribPointer(attrs[i],i===2?4:3,gl.FLOAT,false,0,0);}last=it.asset;}
+gl.uniform3fv(u.loc,it.location);gl.uniform1f(u.angle,it.angle);gl.uniform1f(u.scale,it.scale);gl.drawArrays(gl.TRIANGLES,0,m.count);}}
+let drag=null;canvas.onpointerdown=e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId);};
+canvas.onpointermove=e=>{if(!drag)return;az-=(e.clientX-drag[0])*.006;el=Math.max(.15,Math.min(1.55,el+(e.clientY-drag[1])*.006));drag=[e.clientX,e.clientY];draw();};
+canvas.onpointerup=()=>drag=null;canvas.onpointercancel=()=>drag=null;
+canvas.addEventListener('wheel',e=>{e.preventDefault();width=Math.max(28,Math.min(data.size*3,width*Math.exp(e.deltaY*.001)));draw();},{passive:false});
+document.getElementById('home').onclick=()=>{az=-.95;el=.78;width=data.size*1.55;target=[0,0,2];draw();};
+document.getElementById('top').onclick=()=>{az=-Math.PI/2;el=1.55;width=data.size*1.45;target=[0,0,0];draw();};
+document.getElementById('zoom').onclick=()=>{az=-1.15;el=.65;width=80;target=[0,0,6];draw();};
+document.getElementById('stats').textContent=`${data.size} × ${data.size} m · 건물 ${data.stats.buildings}개 · 공유 메시 ${data.stats.unique_meshes}개`;
+window.addEventListener('resize',draw);draw();document.documentElement.dataset.ready='true';
+}
+} catch(e){document.getElementById('error').textContent=e.message;console.error(e);}
+
+function cpuPreview(canvas,data){
+const ctx=canvas.getContext('2d');if(!ctx)throw Error('Canvas를 사용할 수 없습니다. city.glb를 Blender에서 가져오세요.');
+let az=-.95,el=.78,width=data.size*1.55,target=[0,0,2],drag=null,pending=false;
+const norm=a=>{let l=Math.hypot(...a);return a.map(v=>v/l);};
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];const sun=norm([-.55,-.65,1]);
+function draw(){pending=false;canvas.width=innerWidth;canvas.height=innerHeight;
+const W=canvas.width,H=canvas.height,image=ctx.createImageData(W,H),pixelsOut=image.data,zbuf=new Float32Array(W*H);zbuf.fill(Infinity);
+for(let i=0;i<pixelsOut.length;i+=4){pixelsOut[i]=223;pixelsOut[i+1]=231;pixelsOut[i+2]=223;pixelsOut[i+3]=255;}
+let look=norm([Math.cos(az)*Math.cos(el),Math.sin(az)*Math.cos(el),Math.sin(el)]),f=look.map(v=>-v),r=norm(cross(f,[0,0,1])),up=cross(r,f),pixels=W/width;
+for(const it of data.instances){let [p,n,c]=data.assets[it.asset],co=Math.cos(it.angle),si=Math.sin(it.angle);
+for(let j=0;j<p.length;j+=9){let normal=[co*n[j]-si*n[j+1],si*n[j]+co*n[j+1],n[j+2]];if(dot(normal,look)<=0)continue;
+let points=[];
+for(let k=0;k<9;k+=3){let v=[(co*p[j+k]-si*p[j+k+1])*it.scale+it.location[0]-target[0],(si*p[j+k]+co*p[j+k+1])*it.scale+it.location[1]-target[1],p[j+k+2]*it.scale+it.location[2]-target[2]];points.push([W/2+dot(v,r)*pixels,H/2-dot(v,up)*pixels,dot(v,f)]);}
+let [a,b,d]=points,x0=Math.max(0,Math.floor(Math.min(a[0],b[0],d[0]))),x1=Math.min(W-1,Math.ceil(Math.max(a[0],b[0],d[0]))),y0=Math.max(0,Math.floor(Math.min(a[1],b[1],d[1]))),y1=Math.min(H-1,Math.ceil(Math.max(a[1],b[1],d[1])));
+if(x0>x1||y0>y1)continue;
+let den=(b[1]-d[1])*(a[0]-d[0])+(d[0]-b[0])*(a[1]-d[1]);if(Math.abs(den)<1e-9)continue;
+let light=.45+.55*Math.max(0,dot(normal,sun)),ci=j/3*4,col=[0,1,2].map(k=>Math.round(255*Math.pow(Math.max(0,c[ci+k]*light),1/2.2)));
+let da=(b[1]-d[1])/den,db=(d[1]-a[1])/den;
+for(let y=y0;y<=y1;y++){let wa=((b[1]-d[1])*(x0+.5-d[0])+(d[0]-b[0])*(y+.5-d[1]))/den,wb=((d[1]-a[1])*(x0+.5-d[0])+(a[0]-d[0])*(y+.5-d[1]))/den;
+for(let x=x0;x<=x1;x++,wa+=da,wb+=db){let wc=1-wa-wb;if(wa<-.000001||wb<-.000001||wc<-.000001)continue;let z=wa*a[2]+wb*b[2]+wc*d[2],idx=y*W+x;
+if(z<zbuf[idx]){zbuf[idx]=z;let o=idx*4;pixelsOut[o]=col[0];pixelsOut[o+1]=col[1];pixelsOut[o+2]=col[2];}}}
+}}
+ctx.putImageData(image,0,0);document.documentElement.dataset.ready='cpu';}
+function redraw(){if(!pending){pending=true;requestAnimationFrame(draw);}}
+canvas.onpointerdown=e=>{drag=[e.clientX,e.clientY];canvas.setPointerCapture(e.pointerId);};
+canvas.onpointermove=e=>{if(!drag)return;az-=(e.clientX-drag[0])*.006;el=Math.max(.15,Math.min(1.55,el+(e.clientY-drag[1])*.006));drag=[e.clientX,e.clientY];redraw();};
+canvas.onpointerup=()=>drag=null;canvas.onpointercancel=()=>drag=null;
+canvas.addEventListener('wheel',e=>{e.preventDefault();width=Math.max(28,Math.min(data.size*3,width*Math.exp(e.deltaY*.001)));redraw();},{passive:false});
+document.getElementById('home').onclick=()=>{az=-.95;el=.78;width=data.size*1.55;target=[0,0,2];redraw();};
+document.getElementById('top').onclick=()=>{az=-Math.PI/2;el=1.55;width=data.size*1.45;target=[0,0,0];redraw();};
+document.getElementById('zoom').onclick=()=>{az=-1.15;el=.65;width=80;target=[0,0,6];redraw();};
+document.getElementById('stats').textContent=`${data.size} × ${data.size} m · 건물 ${data.stats.buildings}개 · CPU 간이 미리보기`;
+window.addEventListener('resize',redraw);draw();
+}
+
+</script></html>
