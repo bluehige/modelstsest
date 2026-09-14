@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+output/
+*.blend
+*.blend1
+.pytest_cache/
+.DS_Store
